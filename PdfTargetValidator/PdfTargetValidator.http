@@ -1,0 +1,6 @@
+@PdfTargetValidator_HostAddress = http://localhost:5081
+
+GET {{PdfTargetValidator_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
