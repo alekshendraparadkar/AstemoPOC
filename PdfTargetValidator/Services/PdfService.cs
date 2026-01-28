@@ -71,13 +71,12 @@ public class PdfService : IPdfService
         if (string.IsNullOrEmpty(text))
             return text;
 
-        // First pass: Remove spaces between single characters (PDF character spacing issue)
-        // Pattern: single char space single char space single char
-        // This handles cases like "A S H I S H" → "ASHISH"
-        text = Regex.Replace(text, @"(?<![A-Za-z0-9])\s(?=[A-Za-z0-9]\s)", "");
-        text = Regex.Replace(text, @"([A-Za-z0-9])\s(?=[A-Za-z0-9]\s[A-Za-z0-9])", "$1");
+        // Identify spaced-out letter patterns that need to be joined
+        // Pattern: Single letter followed by space, repeated at least 4+ times (like "A S H I S H" → "ASHISH")
+        // But preserve intentional abbreviations with spaces like "A M AUTO"
+        text = RemoveExcessiveLetterSpacing(text);
         
-        // Better approach: if we have pattern like "X Y Z" where each is single char, remove spaces
+        // Normalize whitespace
         var sb = new StringBuilder();
         var chars = text.ToCharArray();
         
@@ -85,22 +84,7 @@ public class PdfService : IPdfService
         {
             char current = chars[i];
             
-            // Check if this is a space between two single letters (likely PDF spacing issue)
-            bool isPrevCharLetter = i > 0 && char.IsLetter(chars[i - 1]);
-            bool isNextCharLetter = i < chars.Length - 1 && char.IsLetter(chars[i + 1]);
-            bool isCurrentSpace = char.IsWhiteSpace(current);
-            
-            // Check if next-next is space and letter (pattern: CHAR SPACE CHAR SPACE CHAR)
-            bool isSpacedLetterPattern = isCurrentSpace && isPrevCharLetter && isNextCharLetter &&
-                                         (i < chars.Length - 2 && char.IsWhiteSpace(chars[i + 2]));
-            
-            // Skip spaces in the spaced letter pattern
-            if (isSpacedLetterPattern)
-            {
-                continue;
-            }
-            
-            // For other whitespace, normalize it
+            // For whitespace, normalize it
             if (char.IsWhiteSpace(current))
             {
                 // Skip multiple consecutive whitespaces
@@ -122,5 +106,90 @@ public class PdfService : IPdfService
         result = Regex.Replace(result, @" *\n+ *", "\n");
         
         return result.Trim();
+    }
+
+    private string RemoveExcessiveLetterSpacing(string text)
+    {
+        // Only remove spaces from patterns like "A S H I S H B H A T T" (single letters spaced)
+        // DO NOT remove spaces from "A M AUTO SALES" (intentional abbreviations)
+        // Pattern: Detect continuous sequences of single letters separated by spaces
+        // If we find 4+ single letters in a row separated by spaces, join them
+        
+        var sb = new StringBuilder();
+        var chars = text.ToCharArray();
+        int i = 0;
+        
+        while (i < chars.Length)
+        {
+            // Look for pattern: LETTER SPACE LETTER SPACE LETTER SPACE LETTER
+            // Count consecutive single letters separated by spaces
+            int letterCount = 0;
+            int startIdx = i;
+            int j = i;
+            
+            while (j < chars.Length)
+            {
+                if (char.IsLetter(chars[j]))
+                {
+                    letterCount++;
+                    j++;
+                    
+                    // Check if followed by space and another letter
+                    if (j < chars.Length && char.IsWhiteSpace(chars[j]))
+                    {
+                        j++; // Skip space
+                        if (j < chars.Length && char.IsLetter(chars[j]))
+                        {
+                            // Continue pattern
+                            continue;
+                        }
+                        else
+                        {
+                            // Pattern breaks, back up
+                            j--;
+                            break;
+                        }
+                    }
+                    else if (j < chars.Length && char.IsLetter(chars[j]))
+                    {
+                        // No space between letters, pattern ends
+                        break;
+                    }
+                    else
+                    {
+                        // End of string or non-letter, end pattern
+                        break;
+                    }
+                }
+                else
+                {
+                    break;
+                }
+            }
+            
+            // If we found 4+ single letters separated by spaces, remove the spaces between them
+            if (letterCount >= 4)
+            {
+                int k = startIdx;
+                while (k < j)
+                {
+                    if (char.IsLetter(chars[k]))
+                    {
+                        sb.Append(chars[k]);
+                    }
+                    // Skip spaces in this pattern
+                    k++;
+                }
+                i = j;
+            }
+            else
+            {
+                // Not a spaced-out word, keep as-is
+                sb.Append(chars[i]);
+                i++;
+            }
+        }
+        
+        return sb.ToString();
     }
 }
