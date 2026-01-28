@@ -152,7 +152,7 @@ public class LlmService : ILlmService
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
         // Create a fresh HttpRequestMessage to avoid header issues
-        var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions")
+        var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
         {
             Content = content
         };

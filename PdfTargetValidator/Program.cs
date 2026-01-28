@@ -18,6 +18,7 @@ builder.Services.AddHttpClient<ILlmService, LlmService>(client =>
 
 // Register your services
 builder.Services.AddScoped<ILlmService, LlmService>();
+builder.Services.AddScoped<IPdfService, PdfService>();
 // Add other services...
 
 var app = builder.Build();
