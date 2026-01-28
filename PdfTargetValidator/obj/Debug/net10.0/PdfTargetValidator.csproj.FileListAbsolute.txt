@@ -104,3 +104,4 @@ C:\Users\PC007\Desktop\AstemoPOC\PdfTargetValidator\obj\Debug\net10.0\swae.build
 C:\Users\PC007\Desktop\AstemoPOC\PdfTargetValidator\obj\Debug\net10.0\PdfTarge.35621B7A.Up2Date
 C:\Users\PC007\Desktop\AstemoPOC\PdfTargetValidator\obj\Debug\net10.0\PdfTargetValidator.genruntimeconfig.cache
 C:\Users\PC007\Desktop\AstemoPOC\PdfTargetValidator\obj\Debug\net10.0\ref\PdfTargetValidator.dll
+C:\Users\PC007\Desktop\AstemoPOC\PdfTargetValidator\obj\Debug\net10.0\PdfTargetValidator.sourcelink.json

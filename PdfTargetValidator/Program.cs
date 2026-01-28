@@ -1,8 +1,5 @@
-using DotNetEnv;
 using PdfTargetValidator.Interfaces;
 using PdfTargetValidator.Services;
-
-Env.Load();  // Load .env file
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,30 +7,30 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-builder.Services.AddLogging();
 
-// Register HttpClient for OpenAI
-builder.Services.AddHttpClient<ILlmService, LlmService>((serviceProvider, client) =>
+// Add HttpClient with configuration for OpenAI
+builder.Services.AddHttpClient<ILlmService, LlmService>(client =>
 {
-    var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-
-    if (string.IsNullOrEmpty(apiKey))
-        throw new InvalidOperationException("OPENAI_API_KEY not found in .env file");
-
-    client.DefaultRequestHeaders.Authorization =
-        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
     client.BaseAddress = new Uri("https://api.openai.com/v1/");
+    client.Timeout = TimeSpan.FromSeconds(60);
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
 });
 
-// Register PDF service
-builder.Services.AddScoped<IPdfService, PdfService>();
+// Register your services
+builder.Services.AddScoped<ILlmService, LlmService>();
+// Add other services...
 
 var app = builder.Build();
 
 // Configure pipeline
-app.UseSwagger();
-app.UseSwaggerUI();
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
 app.UseHttpsRedirection();
 app.UseAuthorization();
 app.MapControllers();
+
 app.Run();
