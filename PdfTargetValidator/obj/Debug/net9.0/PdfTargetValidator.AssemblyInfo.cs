@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("PdfTargetValidator")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5613c12071636eb21240cdf754bc94dcf1c07813")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+74520c32fccde7968a4a5e9c12ae9b2f8c38839c")]
 [assembly: System.Reflection.AssemblyProductAttribute("PdfTargetValidator")]
 [assembly: System.Reflection.AssemblyTitleAttribute("PdfTargetValidator")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
