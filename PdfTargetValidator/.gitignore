@@ -1,0 +1,50 @@
+bin/
+obj/
+.vs/
+appsettings.Development.json
+## ===== Build Results =====
+bin/
+obj/
+out/
+
+## ===== Visual Studio =====
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## ===== Rider / VS Code =====
+.idea/
+.vscode/
+
+## ===== OS Files =====
+.DS_Store
+Thumbs.db
+
+## ===== Logs =====
+*.log
+
+## ===== App Secrets =====
+appsettings.Development.json
+appsettings.Local.json
+secrets.json
+
+## ===== Publish Output =====
+publish/
+wwwroot/dist/
+
+## ===== Test Results =====
+TestResults/
+
+## ===== NuGet =====
+*.nupkg
+*.snupkg
+.nuget/
+
+## ===== EF Core =====
+Migrations/*.Designer.cs
+Migrations/*.csproj
+
+## ===== Others =====
+*.cache
