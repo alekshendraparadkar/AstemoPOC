@@ -1,9 +1,8 @@
 using System.IO;
 using System.Text;
-using System.Text.RegularExpressions;
 using UglyToad.PdfPig;
+using System.Text.RegularExpressions;
 using PdfTargetValidator.Interfaces;
-using PdfTargetValidator.Utils;
 
 namespace PdfTargetValidator.Services;
 
@@ -19,177 +18,178 @@ public class PdfService : IPdfService
     public string ExtractText(Stream pdfStream)
     {
         using var pdfDocument = PdfDocument.Open(pdfStream);
-
         var textBuilder = new StringBuilder();
-        
+
         foreach (var page in pdfDocument.GetPages())
         {
             var pageText = page.Text;
-            
-            _logger.LogInformation("=== RAW PDF TEXT (Page) ===");
-            _logger.LogInformation("{RawText}", pageText);
-            
-            if (!string.IsNullOrEmpty(pageText))
+            if (!string.IsNullOrWhiteSpace(pageText))
             {
-                // Clean up the extracted text with basic cleaning
-                var cleanedText = CleanPdfText(pageText);
-                
-                _logger.LogInformation("=== CLEANED PDF TEXT (Page) ===");
-                _logger.LogInformation("{CleanedText}", cleanedText);
-                
+                var cleanedText = PreprocessPdfText(pageText);
                 textBuilder.AppendLine(cleanedText);
             }
+
         }
 
-        var finalText = textBuilder.ToString();
-        
-        // Apply advanced preprocessing to structure the text better
-        var preprocessedText = PdfTextPreprocessor.PreprocessPdfText(finalText);
-        
-        _logger.LogInformation("=== FINAL EXTRACTED TEXT ===");
-        _logger.LogInformation("{FinalText}", finalText);
-        
-        _logger.LogInformation("=== PREPROCESSED TEXT (Ready for LLM) ===");
-        _logger.LogInformation("{PreprocessedText}", preprocessedText);
-        
-        // Log extracted fields for debugging
-        var fields = PdfTextPreprocessor.ExtractKeyFields(preprocessedText);
-        _logger.LogInformation("=== EXTRACTED FIELDS ===");
-        _logger.LogInformation("AM Name: {AmName}", fields.AmName);
-        _logger.LogInformation("Region: {Region}", fields.Region);
-        _logger.LogInformation("Customer Name: {CustomerName}", fields.CustomerName);
-        _logger.LogInformation("Sales Office: {SalesOffice}", fields.SalesOffice);
-        _logger.LogInformation("BRAKE PARTS Target: {BrakePartsTarget}", fields.BrakePartsTarget);
-        _logger.LogInformation("BRAKE FLUID Target: {BrakeFluidTarget}", fields.BrakeFluidTarget);
-        _logger.LogInformation("OTHERS Target: {OthersTarget}", fields.OthersTarget);
+        var extractedText = textBuilder.ToString();
+        _logger.LogInformation("=== EXTRACTED PDF TEXT ===");
+        _logger.LogInformation("{ExtractedText}", extractedText);
 
-        return preprocessedText;
+        return extractedText;
     }
-
-    private string CleanPdfText(string text)
+    private string PreprocessPdfText(string text)
     {
-        if (string.IsNullOrEmpty(text))
-            return text;
+        text = NormalizeLineBreaks(text);
+        text = NormalizeWhitespace(text);
 
-        // Identify spaced-out letter patterns that need to be joined
-        // Pattern: Single letter followed by space, repeated at least 4+ times (like "A S H I S H" → "ASHISH")
-        // But preserve intentional abbreviations with spaces like "A M AUTO"
-        text = RemoveExcessiveLetterSpacing(text);
-        
-        // Normalize whitespace
-        var sb = new StringBuilder();
-        var chars = text.ToCharArray();
-        
-        for (int i = 0; i < chars.Length; i++)
-        {
-            char current = chars[i];
-            
-            // For whitespace, normalize it
-            if (char.IsWhiteSpace(current))
-            {
-                // Skip multiple consecutive whitespaces
-                if (sb.Length > 0 && !char.IsWhiteSpace(sb[sb.Length - 1]))
-                {
-                    sb.Append(' ');
-                }
-            }
-            else
-            {
-                sb.Append(current);
-            }
-        }
+        text = SeparateConcatenatedFields(text);
+        text = FixNameFieldIssues(text);
+        text = CleanCustomerField(text);
 
-        // Final cleanup: normalize multiple spaces to single space
-        string result = Regex.Replace(sb.ToString(), @"\s+", " ");
-        
-        // Preserve line breaks
-        result = Regex.Replace(result, @" *\n+ *", "\n");
-        
-        return result.Trim();
+        text = SeparateNumbersAndLetters(text);
+        text = FixDuplicateCharacters(text);
+
+        text = RemoveConfusingSpecialChars(text);
+        text = StructureWithLineBreaks(text);
+        text = ExtractProductTarget2026Only(text);
+
+
+        return text.Trim();
     }
-
-    private string RemoveExcessiveLetterSpacing(string text)
+    private string NormalizeLineBreaks(string text)
     {
-        // Only remove spaces from patterns like "A S H I S H B H A T T" (single letters spaced)
-        // DO NOT remove spaces from "A M AUTO SALES" (intentional abbreviations)
-        // Pattern: Detect continuous sequences of single letters separated by spaces
-        // If we find 4+ single letters in a row separated by spaces, join them
-        
-        var sb = new StringBuilder();
-        var chars = text.ToCharArray();
-        int i = 0;
-        
-        while (i < chars.Length)
-        {
-            // Look for pattern: LETTER SPACE LETTER SPACE LETTER SPACE LETTER
-            // Count consecutive single letters separated by spaces
-            int letterCount = 0;
-            int startIdx = i;
-            int j = i;
-            
-            while (j < chars.Length)
-            {
-                if (char.IsLetter(chars[j]))
-                {
-                    letterCount++;
-                    j++;
-                    
-                    // Check if followed by space and another letter
-                    if (j < chars.Length && char.IsWhiteSpace(chars[j]))
-                    {
-                        j++; // Skip space
-                        if (j < chars.Length && char.IsLetter(chars[j]))
-                        {
-                            // Continue pattern
-                            continue;
-                        }
-                        else
-                        {
-                            // Pattern breaks, back up
-                            j--;
-                            break;
-                        }
-                    }
-                    else if (j < chars.Length && char.IsLetter(chars[j]))
-                    {
-                        // No space between letters, pattern ends
-                        break;
-                    }
-                    else
-                    {
-                        // End of string or non-letter, end pattern
-                        break;
-                    }
-                }
-                else
-                {
-                    break;
-                }
-            }
-            
-            // If we found 4+ single letters separated by spaces, remove the spaces between them
-            if (letterCount >= 4)
-            {
-                int k = startIdx;
-                while (k < j)
-                {
-                    if (char.IsLetter(chars[k]))
-                    {
-                        sb.Append(chars[k]);
-                    }
-                    // Skip spaces in this pattern
-                    k++;
-                }
-                i = j;
-            }
-            else
-            {
-                // Not a spaced-out word, keep as-is
-                sb.Append(chars[i]);
-                i++;
-            }
-        }
-        
-        return sb.ToString();
+        return text.Replace("\r\n", "\n").Replace("\r", "\n");
     }
+
+    private string NormalizeWhitespace(string text)
+    {
+        text = Regex.Replace(text, @"[ \t]+", " ");
+        text = Regex.Replace(text, @"\n{2,}", "\n\n");
+        return text.Trim();
+    }
+    private string SeparateConcatenatedFields(string text)
+    {
+        var keywords = new[]
+        {
+            "Sales", "Office", "Region", "Area", "State", "Customer", "Target", "Product"
+        };
+
+        foreach (var k in keywords)
+        {
+            text = Regex.Replace(text, $@"([a-zA-Z])({k})", "$1\n$2");
+        }
+
+        // Normalize label formatting
+        text = Regex.Replace(text, @"(AM|Customer)\s*:", "$1: ");
+
+        return text;
+    }
+
+    private string FixNameFieldIssues(string text)
+    {
+        text = Regex.Replace(
+            text,
+            @"\b([A-Z]{3,})(S)(\s*(Sales|Office|Region|Area))",
+            "$1\n$3");
+
+        return text;
+    }
+    private string CleanCustomerField(string text)
+    {
+        text = Regex.Replace(
+            text,
+            @"Customer\s*:\s*",
+            "Customer: ",
+            RegexOptions.IgnoreCase);
+        return text;
+    }
+    private string SeparateNumbersAndLetters(string text)
+    {
+        text = Regex.Replace(text, @"([A-Za-z])(\d)", "$1 $2");
+        text = Regex.Replace(text, @"(\d)([A-Za-z])", "$1 $2");
+        return text;
+    }
+
+
+    private string FixDuplicateCharacters(string text)
+    {
+
+        return Regex.Replace(text, @"([A-Za-z])\1{1,}", "$1$1");
+    }
+
+
+    private string RemoveConfusingSpecialChars(string text)
+    {
+        // Allow square brackets for customer code like [S]
+        return Regex.Replace(text, @"[^\w\s:.,\-\[\]\/\n]", "");
+    }
+
+
+private string StructureWithLineBreaks(string text)
+{
+    var products = new[]
+    {
+        "BRAKEPARTS", "BRAKE PARTS",
+        "BRAKEFLUID", "BRAKE FLUID",
+        "EMS", "LUBES", "SUSPENSION",
+        "OTHERS",
+        "OVERALL", "OVER ALL"
+    };
+
+    // Insert newline BEFORE product even if stuck to number
+    foreach (var p in products)
+    {
+        text = Regex.Replace(
+            text,
+            $@"(?i){p}",
+            "\n" + p);
+    }
+
+    text = Regex.Replace(
+        text,
+        @"Target\s*2026",
+        "\nTarget 2026\n",
+        RegexOptions.IgnoreCase);
+
+    text = Regex.Replace(
+        text,
+        @"Customer Signature",
+        "\n\nCustomer Signature",
+        RegexOptions.IgnoreCase);
+
+    return text;
+}
+
+private string ExtractProductTarget2026Only(string text)
+{
+    var sb = new StringBuilder();
+
+    sb.AppendLine();
+    sb.AppendLine("=== EXTRACTED TARGET 2026 VALUES ===");
+
+    var lines = text
+        .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        .Select(l => l.Trim())
+        .ToList();
+
+    foreach (var line in lines)
+    {
+        if (!Regex.IsMatch(line, @"^(BRAKE|EMS|LUBES|SUSPENSION|OTHERS)", RegexOptions.IgnoreCase))
+            continue;
+
+        var nums = Regex.Matches(line, @"\d[\d,]*");
+
+        if (nums.Count == 0)
+            continue;
+
+        // LAST number = Target 2026
+        var last = nums[^1].Value.Replace(",", "");
+
+        var product = Regex.Match(line, @"^[A-Za-z\s]+").Value.Trim();
+
+        sb.AppendLine($"PRODUCT: {product} | TARGET2026: {last}");
+    }
+
+    return text + sb.ToString();   
+}
 }

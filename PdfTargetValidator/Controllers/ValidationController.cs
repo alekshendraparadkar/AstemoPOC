@@ -26,7 +26,7 @@ public class ValidationController : ControllerBase
         var testValidationrequest = new ValidationRequest
         {
             AmName = "ASHISH BHATT",
-            CustomerName = "A M AUTO SALES",
+            CustomerName = "[S]- 29870 - A M AUTO SALES",
 
             Target2026 = new List<ProductTarget2026>
             {

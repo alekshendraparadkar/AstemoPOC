@@ -20,13 +20,15 @@ public class LlmService : ILlmService
     {
         try
         {
+            _logger.LogInformation("=== PREPROCESSED PDF TEXT SENT TO LLM ===");
+            _logger.LogInformation("{PdfText}", pdfText);
+            
             var prompt = BuildValidationPrompt(pdfText, validationRequest);
             var response = await CallOpenAiAsync(prompt);
 
             var result = ParseValidationResult(response);
             
-            // Clean and normalize extracted values to catch matches that might differ in formatting
-            result = CleanExtractedValues(result);
+            result = NormalizeValidationResult(result);
             
             return result;
         }
@@ -74,9 +76,8 @@ public class LlmService : ILlmService
         2. CUSTOMER NAME EXTRACTION:
            - Find text after ""Customer:"" in the PDF
            - Look for pattern like ""[S]-29870 - A M AUTO SALES""
-           - Extract everything after the last ""-"" and trim spaces
            - The name should only contain letters, numbers, spaces, and hyphens
-           - Example: ""[S]-29870 - A M AUTO SALES"" → ""A M AUTO SALES""
+           - Example: ""[S]-29870 - A M AUTO SALES"" → ""[S]-29870 - A M AUTO SALES""
 
         3. TARGET 2026 VALUES EXTRACTION:
            - Find the table row for each product
@@ -122,7 +123,7 @@ public class LlmService : ILlmService
             }},
             {{
               ""field"": ""OTHERS Target"",
-              ""expectedValue"": ""1000000"",
+              ""expectedValue"": ""737373073"",
               ""pdfValue"": ""Value from PDF"",
               ""reason"": ""Reason for mismatch if any""
             }}
@@ -134,17 +135,15 @@ public class LlmService : ILlmService
            - If you see ""ASHISH BHATTS"" but expected is ""ASHISH BHATT"", the 'S' is likely from the next field
            - Look for transitions from lowercase to UPPERCASE to identify field boundaries
            - Extract names by stopping at common field keywords: Sales, Office, Contact, Region, Area, Code, etc.
-           - Common pattern: ""NAME + KEYWORD"" → Extract only ""NAME""
-        
-        2. For customer name, cleanly remove prefixes like ""[S]-29870 - "" 
-        
-        3. For numeric values, handle both formats:
+           - Common pattern: ""KEYWORD + NAME"" → Extract only ""NAME""
+                
+        2. For numeric values, handle both formats:
            - Indian format: ""70,00,000"" (remove commas)
            - Standard format: ""7000000""
         
-        4. Return ONLY valid JSON in the specified format
+        3. Return ONLY valid JSON in the specified format
         
-        5. If extracted value has trailing characters from adjacent fields, exclude them:
+        4. If extracted value has trailing characters from adjacent fields, exclude them:
            - ""BHATTS"" → ""BHATT"" (remove extra S from adjacent field)
            - ""SALESA"" → ""SALES"" (remove adjacent characters)
         ";
@@ -171,17 +170,16 @@ public class LlmService : ILlmService
 
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-        // Create a fresh HttpRequestMessage to avoid header issues
-        var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
+        var  request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
         {
             Content = content
         };
 
-        // Add authorization header
+        
         request.Headers.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
-        // Add other required headers
+        
         request.Headers.Add("Accept", "application/json");
         request.Headers.Add("User-Agent", "PdfTargetValidator/1.0");
 
@@ -286,10 +284,8 @@ public class LlmService : ILlmService
             @"```json\s*|\s*```",
             "");
 
-        // Remove any leading/trailing whitespace
         response = response.Trim();
 
-        // Ensure it starts with { and ends with }
         if (!response.StartsWith("{"))
         {
             var startIndex = response.IndexOf('{');
@@ -317,39 +313,39 @@ public class LlmService : ILlmService
         };
     }
 
-    private ValidationResult CleanExtractedValues(ValidationResult result)
+    /// <summary>
+    /// Normalize validation results after LLM processing
+    /// With pre-processed text, we only need minimal cleanup for case-insensitive comparisons
+    /// </summary>
+    private ValidationResult NormalizeValidationResult(ValidationResult result)
     {
         if (result?.Mismatches == null)
             return result;
 
         foreach (var mismatch in result.Mismatches)
         {
-           
-            if (mismatch.Field == "AM Name" && !string.IsNullOrEmpty(mismatch.PdfValue))
-            {
-                mismatch.PdfValue = CleanAmName(mismatch.PdfValue, mismatch.ExpectedValue);
-            }
+            // Trim whitespace
+            if (!string.IsNullOrEmpty(mismatch.PdfValue))
+                mismatch.PdfValue = mismatch.PdfValue.Trim();
+            
+            if (!string.IsNullOrEmpty(mismatch.ExpectedValue))
+                mismatch.ExpectedValue = mismatch.ExpectedValue.Trim();
 
-            if (mismatch.Field == "Customer Name" && !string.IsNullOrEmpty(mismatch.PdfValue))
+            // Check case-insensitive match after trimming
+            if (!string.IsNullOrEmpty(mismatch.PdfValue) && !string.IsNullOrEmpty(mismatch.ExpectedValue))
             {
-                mismatch.PdfValue = CleanCustomerName(mismatch.PdfValue, mismatch.ExpectedValue);
-            }
-
-            if ((mismatch.Field.Contains("Target") || mismatch.Field.EndsWith("Target")) && 
-                !string.IsNullOrEmpty(mismatch.PdfValue) && !string.IsNullOrEmpty(mismatch.ExpectedValue))
-            {
-                mismatch.PdfValue = CleanTargetValue(mismatch.PdfValue, mismatch.ExpectedValue);
-            }
-
-            if (!string.IsNullOrEmpty(mismatch.ExpectedValue) &&
-                mismatch.PdfValue?.Equals(mismatch.ExpectedValue, StringComparison.OrdinalIgnoreCase) == true)
-            {
-                mismatch.Reason = "Value matches";
+                if (mismatch.PdfValue.Equals(mismatch.ExpectedValue, StringComparison.OrdinalIgnoreCase))
+                {
+                    mismatch.Reason = "Value matches (case-insensitive)";
+                }
             }
         }
 
+        // Update validation status
         result.isValid = !result.Mismatches.Any(m =>
-            m.PdfValue?.Equals(m.ExpectedValue, StringComparison.OrdinalIgnoreCase) != true);
+            string.IsNullOrEmpty(m.PdfValue) ||
+            string.IsNullOrEmpty(m.ExpectedValue) ||
+            !m.PdfValue.Equals(m.ExpectedValue, StringComparison.OrdinalIgnoreCase));
 
         if (result.isValid)
         {
@@ -357,201 +353,6 @@ public class LlmService : ILlmService
         }
 
         return result;
-    }
-
-    private string CleanAmName(string pdfValue, string expectedValue)
-    {
-        if (string.IsNullOrEmpty(pdfValue) || string.IsNullOrEmpty(expectedValue))
-            return pdfValue;
-
-        pdfValue = pdfValue.Trim();
-
-        if (pdfValue.Equals(expectedValue, StringComparison.OrdinalIgnoreCase))
-            return pdfValue;
-
-        var commonSuffixes = new[] { "S", "Sales", "Office", "Contact", "Region", "Area", "Code", "State" };
-
-        foreach (var suffix in commonSuffixes)
-        {
-            if (pdfValue.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-            {
-                var withoutSuffix = pdfValue.Substring(0, pdfValue.Length - suffix.Length).TrimEnd();
-                if (withoutSuffix.Equals(expectedValue, StringComparison.OrdinalIgnoreCase))
-                {
-                    return withoutSuffix;
-                }
-            }
-        }
-
-        if (pdfValue.Length > 1 && pdfValue.Length == expectedValue.Length + 1)
-        {
-            var withoutLastChar = pdfValue.Substring(0, pdfValue.Length - 1);
-            if (withoutLastChar.Equals(expectedValue, StringComparison.OrdinalIgnoreCase))
-            {
-                return withoutLastChar;
-            }
-        }
-
-        if (CalculateLevenshteinDistance(pdfValue, expectedValue) == 1)
-        {
-            return expectedValue;
-        }
-
-        return pdfValue;
-    }
-
-    private string CleanCustomerName(string pdfValue, string expectedValue)
-    {
-        if (string.IsNullOrEmpty(pdfValue) || string.IsNullOrEmpty(expectedValue))
-            return pdfValue;
-
-        pdfValue = pdfValue.Trim();
-
-        // If they already match (case-insensitive), return as is
-        if (pdfValue.Equals(expectedValue, StringComparison.OrdinalIgnoreCase))
-            return pdfValue;
-
-        // Handle missing leading character (e.g., "AM AUTO SALES" should be "A M AUTO SALES")
-        // Check if prepending 'A ' would match
-        if (!pdfValue.StartsWith("A ", StringComparison.OrdinalIgnoreCase))
-        {
-            var withLeadingA = "A " + pdfValue;
-            if (withLeadingA.Equals(expectedValue, StringComparison.OrdinalIgnoreCase))
-            {
-                return withLeadingA;
-            }
-        }
-
-        // Handle missing space after first letter (e.g., "AM AUTO SALES" vs "A M AUTO SALES")
-        if (pdfValue.Length >= 2 && pdfValue[0] != ' ')
-        {
-            var withSpaceAfterFirst = pdfValue[0] + " " + pdfValue.Substring(1);
-            if (withSpaceAfterFirst.Equals(expectedValue, StringComparison.OrdinalIgnoreCase))
-            {
-                return withSpaceAfterFirst;
-            }
-        }
-
-        // Handle leading character missing from expected
-        // e.g., pdfValue = "A M AUTO SALES", expectedValue = "AM AUTO SALES"
-        if (pdfValue.Length > expectedValue.Length)
-        {
-            // Try removing leading character and space
-            if (pdfValue.Length >= 2 && pdfValue[1] == ' ')
-            {
-                var withoutLeadingChar = pdfValue.Substring(2);
-                if (withoutLeadingChar.Equals(expectedValue, StringComparison.OrdinalIgnoreCase))
-                {
-                    return withoutLeadingChar;
-                }
-            }
-        }
-
-        // Fuzzy matching for customer names - allow up to 2 character difference
-        int distance = CalculateLevenshteinDistance(pdfValue, expectedValue);
-        if (distance <= 2)
-        {
-            return expectedValue;
-        }
-
-        return pdfValue;
-    }
-
-    private string CleanTargetValue(string pdfValue, string expectedValue)
-    {
-        if (string.IsNullOrEmpty(pdfValue) || string.IsNullOrEmpty(expectedValue))
-            return pdfValue;
-
-        pdfValue = pdfValue.Trim();
-
-        // If they already match, return as is
-        if (pdfValue.Equals(expectedValue, StringComparison.OrdinalIgnoreCase))
-            return pdfValue;
-
-        // Remove commas and spaces to get numeric values
-        var pdfNumeric = System.Text.RegularExpressions.Regex.Replace(pdfValue, @"[,\s]", "");
-        var expectedNumeric = System.Text.RegularExpressions.Regex.Replace(expectedValue, @"[,\s]", "");
-
-        // If numeric values match after removing formatting, return expected format
-        if (pdfNumeric.Equals(expectedNumeric, StringComparison.OrdinalIgnoreCase))
-        {
-            return expectedValue;
-        }
-
-        // Try to parse as numbers to handle Indian format (10,00,000 = 1,000,000)
-        if (long.TryParse(pdfNumeric, out long pdfNum) && 
-            long.TryParse(expectedNumeric, out long expectedNum))
-        {
-            // Check if PDF value has an extra zero (common parsing error)
-            // e.g., "10000000" should be "1000000"
-            if (pdfNum == expectedNum * 10)
-            {
-                return expectedValue;
-            }
-
-            // Check for Indian format confusion
-            // Sometimes "10,00,000" (10 lakhs) gets parsed as "1000000" instead of "1000000"
-            // but "10000000" gets read as "1,00,00,000" (10 million)
-            // If difference is exactly 10x, it's likely an extra digit
-            if (pdfNum > expectedNum && pdfNum <= expectedNum * 100)
-            {
-                // Check if removing the first digit matches
-                string pdfStr = pdfNum.ToString();
-                if (pdfStr.Length > expectedNumeric.Length)
-                {
-                    // Try removing each digit from the start and see if it matches
-                    for (int i = 0; i < Math.Min(2, pdfStr.Length); i++)
-                    {
-                        var trimmed = pdfStr.Substring(i);
-                        if (trimmed.Equals(expectedNumeric))
-                        {
-                            return expectedValue;
-                        }
-                    }
-                }
-            }
-        }
-
-        // If still doesn't match but difference is small, use expected value
-        if (long.TryParse(pdfNumeric, out long pdfVal) && 
-            long.TryParse(expectedNumeric, out long expVal) &&
-            Math.Abs(pdfVal - expVal) <= expVal * 0.1) // Allow 10% difference
-        {
-            return expectedValue;
-        }
-
-        return pdfValue;
-    }
-
-    private int CalculateLevenshteinDistance(string s1, string s2)
-    {
-        s1 = s1 ?? "";
-        s2 = s2 ?? "";
-
-        if (s1.Length == 0) return s2.Length;
-        if (s2.Length == 0) return s1.Length;
-
-        var distances = new int[s1.Length + 1, s2.Length + 1];
-
-        for (int i = 0; i <= s1.Length; i++)
-            distances[i, 0] = i;
-
-        for (int j = 0; j <= s2.Length; j++)
-            distances[0, j] = j;
-
-        for (int i = 1; i <= s1.Length; i++)
-        {
-            for (int j = 1; j <= s2.Length; j++)
-            {
-                int cost = char.ToUpper(s1[i - 1]) == char.ToUpper(s2[j - 1]) ? 0 : 1;
-                distances[i, j] = Math.Min(
-                    Math.Min(distances[i - 1, j] + 1, distances[i, j - 1] + 1),
-                    distances[i - 1, j - 1] + cost
-                );
-            }
-        }
-
-        return distances[s1.Length, s2.Length];
     }
 }
     
