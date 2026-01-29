@@ -10,11 +10,15 @@ public class ValidationController : ControllerBase
 {
     private readonly IPdfService _pdfService;
     private readonly ILlmService _llmService;
+    private readonly ISignatureService _signatureService;
 
-    public ValidationController(IPdfService pdfService, ILlmService llmService)
+
+    public ValidationController(IPdfService pdfService, ILlmService llmService, ISignatureService signatureService)
     {
         _pdfService = pdfService;
         _llmService = llmService;
+        _signatureService = signatureService;
+
     }
 
     [HttpPost("validate")]
@@ -25,23 +29,23 @@ public class ValidationController : ControllerBase
 
         var testValidationrequest = new ValidationRequest
         {
-            AmName = "ASHISH BHATT",
-            CustomerName = "[S]- 29870 - A M AUTO SALES",
+            AmName = "ATUL CHAKRAWAR",
+            CustomerName = "[S]- 28661 - VOHRA DISTRIBUTORS",
 
             Target2026 = new List<ProductTarget2026>
             {
                 new ProductTarget2026 {
                     Product = "BRAKE PARTS",
-                    Target2026 = 7000000
+                    Target2026 = 7080858
                 },
                 new ProductTarget2026 {
                     Product = "BRAKE FLUID",
-                    Target2026 = 500000
+                    Target2026 = 4775806
                 },
                 new ProductTarget2026 {
-                    Product = "OTHERS",
-                    Target2026 = 1000000
-                }
+                    Product = "Overall",
+                    Target2026 = 14483502
+                },
             }
         };
 
@@ -49,6 +53,8 @@ public class ValidationController : ControllerBase
         {
             using var stream = pdf.OpenReadStream();
             var pdfText = _pdfService.ExtractText(stream);
+            var isSignatureDetected = await _signatureService.IsSignaturePresentAsync(pdf);
+            testValidationrequest.IsSignatureDetected = isSignatureDetected;
 
             var result = await _llmService.ValidateAsync(pdfText, testValidationrequest);
 
@@ -58,6 +64,7 @@ public class ValidationController : ControllerBase
                 isValid = result.isValid,
                 message = result.Message,
                 mismatches = result.Mismatches,
+                signatureDetected = isSignatureDetected,
                 testDataUsed = new
                 {
                     amName = testValidationrequest.AmName,
