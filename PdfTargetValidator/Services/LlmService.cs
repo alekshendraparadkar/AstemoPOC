@@ -80,19 +80,35 @@ public class LlmService : ILlmService
            - Example: ""[S]-29870 - A M AUTO SALES"" → ""[S]-29870 - A M AUTO SALES""
 
         3. TARGET 2026 VALUES EXTRACTION:
-           - Find the table row for each product
-           - Extract the value from the ""Target 2026"" column
+           - Find the table with columns: Product Group, Target 2025, Achievement 2025, etc.
+           - For each product (BRAKE PARTS, BRAKE FLUID, EMS, SUSPENSION, LUBES, OTHERS):
+            * Locate the EXACT row where the Product Group name appears
+            * Extract ONLY the value from the ""Target 2026"" column in THAT SAME ROW
+            * DO NOT extract values from other rows like ""Over All"" or summary rows
+   
+           - CRITICAL: When extracting ""OTHERS"" target value:
+            * Look for the row that starts with ""OTHERS"" (the word, not the letter O)
+            * The ""OTHERS"" row is DIFFERENT from the ""Over All"" row
+            * DO NOT confuse the letter ""O"" in ""Over All"" with the digit ""0""
+            * Example table structure:
+              LUBES          ...    ...    ...
+              OTHERS         -      2,22,020  -     -    -    10,00,000  ← Extract from THIS row
+              Over All       ...    ...    ...                85,00,000  ← This is a DIFFERENT row
+   
            - Remove all commas and spaces before comparing
-           - Indian number format: ""70,00,000"" = 7000000
-           - Extract only numeric values
-
+           - Indian number format examples:
+             * ""70,00,000"" = 7000000
+             * ""10,00,000"" = 1000000
+             * ""5,00,000"" = 500000
+           - Extract only numeric values (digits 0-9)
+           - Ignore any alphabetic characters when extracting numbers   
         === VALIDATION RULES ===
         1. AM Name: Must match {request.AmName} (case-insensitive)
         2. Customer Name: Must match {request.CustomerName} (case-insensitive)
         3. Target Values: Must match exactly the numeric values
 
         === OUTPUT FORMAT ===
-        Return ONLY valid JSON in this exact format:
+        Return ONLY valid JSON in this format:
         {{
           ""isValid"": true/false,
           ""message"": ""Brief summary message"",
@@ -111,22 +127,16 @@ public class LlmService : ILlmService
             }},
             {{
               ""field"": ""BRAKE PARTS Target"",
-              ""expectedValue"": ""7000000"",
+              ""expectedValue"": ""56800"",
               ""pdfValue"": ""Value from PDF"",
               ""reason"": ""Reason for mismatch if any""
             }},
             {{
               ""field"": ""BRAKE FLUID Target"",
-              ""expectedValue"": ""500000"",
+              ""expectedValue"": ""456500"",
               ""pdfValue"": ""Value from PDF"",
               ""reason"": ""Reason for mismatch if any""
             }},
-            {{
-              ""field"": ""OTHERS Target"",
-              ""expectedValue"": ""737373073"",
-              ""pdfValue"": ""Value from PDF"",
-              ""reason"": ""Reason for mismatch if any""
-            }}
           ]
         }}
 
