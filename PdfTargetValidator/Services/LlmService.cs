@@ -22,14 +22,32 @@ public class LlmService : ILlmService
         {
             _logger.LogInformation("=== PREPROCESSED PDF TEXT SENT TO LLM ===");
             _logger.LogInformation("{PdfText}", pdfText);
-            
+
             var prompt = BuildValidationPrompt(pdfText, validationRequest);
             var response = await CallOpenAiAsync(prompt);
 
             var result = ParseValidationResult(response);
-            
+
             result = NormalizeValidationResult(result);
-            
+            if (!validationRequest.IsSignatureDetected)
+            {
+                result.isValid = false;
+
+                if (!result.Mismatches.Any(m => m.Field.Equals("Signature", StringComparison.OrdinalIgnoreCase)))
+                {
+                    result.Mismatches.Add(new ValidationMismatch
+                    {
+                        Field = "Signature",
+                        ExpectedValue = "Present",
+                        PdfValue = "Not Present",
+                        Reason = "Signature is mandatory but not found in document"
+                    });
+                }
+
+                result.Message = "Validation failed: mandatory signature missing";
+            }
+
+
             return result;
         }
         catch (Exception ex)
@@ -60,6 +78,8 @@ public class LlmService : ILlmService
         2. Customer Name: {request.CustomerName}
         3. Target 2026 Values:
         {targets}
+        4. Signature Present: {request.IsSignatureDetected}
+
 
         === PDF CONTENT ===
         {pdfText}
@@ -101,14 +121,29 @@ public class LlmService : ILlmService
              * ""10,00,000"" = 1000000
              * ""5,00,000"" = 500000
            - Extract only numeric values (digits 0-9)
-           - Ignore any alphabetic characters when extracting numbers   
+           - Ignore any alphabetic characters when extracting numbers 
+
+        4. SIGNATURE VALIDATION:
+            - Signature is MANDATORY for this document.
+            - If Signature Detected = false → add mismatch:
+                field = ""Signature""
+                expectedValue = ""Present""
+                pdfValue = ""Not Present""
+                reason = ""Signature is mandatory but not found in document""
+     
         === VALIDATION RULES ===
         1. AM Name: Must match {request.AmName} (case-insensitive)
         2. Customer Name: Must match {request.CustomerName} (case-insensitive)
         3. Target Values: Must match exactly the numeric values
+        4. Signature: Must match expected presence ({request.IsSignatureDetected})
+
+
 
         === OUTPUT FORMAT ===
         Return ONLY valid JSON in this format:
+        Do NOT add trailing commas.
+        Do NOT add markdown.
+
         {{
           ""isValid"": true/false,
           ""message"": ""Brief summary message"",
@@ -137,24 +172,30 @@ public class LlmService : ILlmService
               ""pdfValue"": ""Value from PDF"",
               ""reason"": ""Reason for mismatch if any""
             }},
+            {{""field"": ""Signature"",
+              ""expectedValue"": ""true"",
+              ""pdfValue"": ""true or false"",
+              ""reason"": ""Signature missing if expected true but not found""
+            }},
           ]
         }}
 
         === IMPORTANT INSTRUCTIONS ===
-        1. AM Name extraction is critical:
-           - If you see ""ASHISH BHATTS"" but expected is ""ASHISH BHATT"", the 'S' is likely from the next field
+        1.AM Name extraction is critical:
+           -If you see ""ASHISH BHATTS"" but expected is ""ASHISH BHATT"", the 'S' is likely from the next field
            - Look for transitions from lowercase to UPPERCASE to identify field boundaries
            - Extract names by stopping at common field keywords: Sales, Office, Contact, Region, Area, Code, etc.
            - Common pattern: ""KEYWORD + NAME"" → Extract only ""NAME""
                 
         2. For numeric values, handle both formats:
-           - Indian format: ""70,00,000"" (remove commas)
+           -Indian format: ""70,00,000""(remove commas)
            - Standard format: ""7000000""
-        
-        3. Return ONLY valid JSON in the specified format
+
+
+        3.Return ONLY valid JSON in the specified format
         
         4. If extracted value has trailing characters from adjacent fields, exclude them:
-           - ""BHATTS"" → ""BHATT"" (remove extra S from adjacent field)
+           -""BHATTS"" → ""BHATT"" (remove extra S from adjacent field)
            - ""SALESA"" → ""SALES"" (remove adjacent characters)
         ";
 
@@ -171,7 +212,7 @@ public class LlmService : ILlmService
             model = "gpt-4o-mini",
             messages = new[] { new { role = "user", content = prompt } },
             temperature = 0.1,
-            max_tokens = 1000,
+            max_tokens = 1200,
             response_format = new { type = "json_object" }
         };
 
@@ -180,16 +221,16 @@ public class LlmService : ILlmService
 
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-        var  request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
+        var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
         {
             Content = content
         };
 
-        
+
         request.Headers.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
-        
+
         request.Headers.Add("Accept", "application/json");
         request.Headers.Add("User-Agent", "PdfTargetValidator/1.0");
 
@@ -228,87 +269,68 @@ public class LlmService : ILlmService
     private ValidationResult ParseValidationResult(string response)
     {
         if (string.IsNullOrWhiteSpace(response))
-        {
-            return new ValidationResult
-            {
-                isValid = false,
-                Message = "Empty response from AI service",
-                Mismatches = new List<ValidationMismatch>()
-            };
-        }
+            return CreateDefaultValidationResult("Empty response from AI service");
 
         var cleanedResponse = CleanJsonResponse(response);
 
         try
         {
-            var result = JsonSerializer.Deserialize<ValidationResult>(cleanedResponse, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            });
+            var result = JsonSerializer.Deserialize<ValidationResult>(
+                cleanedResponse,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
             if (result == null)
-            {
-                _logger.LogWarning("Deserialized result is null");
-                return CreateDefaultValidationResult("Invalid response format");
-            }
+                return CreateDefaultValidationResult("Invalid JSON structure from AI");
 
             return result;
         }
         catch (JsonException ex)
         {
-            _logger.LogError(ex, "Failed to parse AI response. Response: {Response}", response);
+            _logger.LogError(ex, "Failed to parse AI JSON. Raw response: {Response}", response);
 
             var jsonMatch = System.Text.RegularExpressions.Regex.Match(
                 response,
                 @"```json\s*(.*?)\s*```|```\s*(.*?)\s*```",
-                System.Text.RegularExpressions.RegexOptions.Singleline
-            );
+                System.Text.RegularExpressions.RegexOptions.Singleline);
 
             if (jsonMatch.Success)
             {
-                var jsonContent = jsonMatch.Groups[1].Success ?
-                    jsonMatch.Groups[1].Value : jsonMatch.Groups[2].Value;
+                var jsonContent = jsonMatch.Groups[1].Success
+                    ? jsonMatch.Groups[1].Value
+                    : jsonMatch.Groups[2].Value;
 
                 try
                 {
-                    return JsonSerializer.Deserialize<ValidationResult>(jsonContent, new JsonSerializerOptions
-                    {
-                        PropertyNameCaseInsensitive = true
-                    }) ?? CreateDefaultValidationResult("Parsed from markdown but got null");
+                    return JsonSerializer.Deserialize<ValidationResult>(
+                               jsonContent,
+                               new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                           ?? CreateDefaultValidationResult("Parsed markdown JSON but got null");
                 }
                 catch
                 {
-                    return CreateDefaultValidationResult($"Failed to parse JSON from markdown: {ex.Message}");
+                    return CreateDefaultValidationResult("Failed to parse JSON from markdown block");
                 }
             }
 
-            return CreateDefaultValidationResult($"Failed to parse AI response: {ex.Message}");
+            return CreateDefaultValidationResult("AI response was not valid JSON");
         }
     }
 
     private string CleanJsonResponse(string response)
     {
         response = System.Text.RegularExpressions.Regex.Replace(
-            response,
-            @"```json\s*|\s*```",
-            "");
+                response,
+                @"```json\s*|\s*```",
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         response = response.Trim();
 
-        if (!response.StartsWith("{"))
-        {
-            var startIndex = response.IndexOf('{');
-            if (startIndex >= 0)
-                response = response.Substring(startIndex);
-        }
+        var start = response.IndexOf('{');
+        var end = response.LastIndexOf('}');
 
-        if (!response.EndsWith("}"))
-        {
-            var endIndex = response.LastIndexOf('}');
-            if (endIndex >= 0)
-                response = response.Substring(0, endIndex + 1);
-        }
+        if (start >= 0 && end > start)
+            response = response.Substring(start, end - start + 1);
 
         return response;
     }
@@ -332,37 +354,35 @@ public class LlmService : ILlmService
         if (result?.Mismatches == null)
             return result;
 
+
         foreach (var mismatch in result.Mismatches)
         {
-            // Trim whitespace
+            if (mismatch.Field.Equals("Signature", StringComparison.OrdinalIgnoreCase))
+                continue;
+
             if (!string.IsNullOrEmpty(mismatch.PdfValue))
                 mismatch.PdfValue = mismatch.PdfValue.Trim();
-            
+
             if (!string.IsNullOrEmpty(mismatch.ExpectedValue))
                 mismatch.ExpectedValue = mismatch.ExpectedValue.Trim();
 
-            // Check case-insensitive match after trimming
-            if (!string.IsNullOrEmpty(mismatch.PdfValue) && !string.IsNullOrEmpty(mismatch.ExpectedValue))
+            if (!string.IsNullOrEmpty(mismatch.PdfValue) &&
+                !string.IsNullOrEmpty(mismatch.ExpectedValue) &&
+                mismatch.PdfValue.Equals(mismatch.ExpectedValue, StringComparison.OrdinalIgnoreCase))
             {
-                if (mismatch.PdfValue.Equals(mismatch.ExpectedValue, StringComparison.OrdinalIgnoreCase))
-                {
-                    mismatch.Reason = "Value matches (case-insensitive)";
-                }
+                mismatch.Reason = "Value matches (case-insensitive)";
             }
         }
-
         // Update validation status
-        result.isValid = !result.Mismatches.Any(m =>
-            string.IsNullOrEmpty(m.PdfValue) ||
-            string.IsNullOrEmpty(m.ExpectedValue) ||
-            !m.PdfValue.Equals(m.ExpectedValue, StringComparison.OrdinalIgnoreCase));
+        result.isValid = !result.Mismatches.Any();
+
 
         if (result.isValid)
-        {
             result.Message = "All fields match successfully";
-        }
+        else if (string.IsNullOrWhiteSpace(result.Message))
+            result.Message = "One or more validations failed";
 
         return result;
     }
+
 }
-    
