@@ -8,6 +8,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+
 // Add HttpClient with configuration for OpenAI
 builder.Services.AddHttpClient<ILlmService, LlmService>(client =>
 {
@@ -18,8 +19,6 @@ builder.Services.AddHttpClient<ILlmService, LlmService>(client =>
 
 // Register your services
 builder.Services.AddScoped<ILlmService, LlmService>();
-builder.Services.AddScoped<IPdfService, PdfService>();
-builder.Services.AddScoped<ISignatureService, SignatureService>();
 
 // Add other services...
 
@@ -35,5 +34,6 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseAuthorization();
 app.MapControllers();
+
 
 app.Run();

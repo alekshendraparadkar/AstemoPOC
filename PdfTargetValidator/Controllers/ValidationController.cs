@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json;
 using PdfTargetValidator.Interfaces;
 using PdfTargetValidator.Models;
 
@@ -8,86 +9,38 @@ namespace PdfTargetValidator.Controllers;
 [Route("api/validation")]
 public class ValidationController : ControllerBase
 {
-    private readonly IPdfService _pdfService;
     private readonly ILlmService _llmService;
-    private readonly ISignatureService _signatureService;
 
-
-    public ValidationController(IPdfService pdfService, ILlmService llmService, ISignatureService signatureService)
+    public ValidationController(ILlmService llmService)
     {
-        _pdfService = pdfService;
         _llmService = llmService;
-        _signatureService = signatureService;
 
     }
 
-    [HttpPost("validate")]
-    public async Task<IActionResult> ValidatePdf(IFormFile pdf)
+    [HttpPost("upload")]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadPdf([FromForm] PdfUploadForm form)
     {
-        if (pdf == null || pdf.Length == 0)
-            return BadRequest(new { error = "Please Upload a pdf file" });
+        if (form.File == null || form.File.Length == 0)
+            return BadRequest("No file uploaded");
 
-        var testValidationrequest = new ValidationRequest
+        // ✅ Hardcoded test values (OK for now)
+        var validationRequest = new ValidationRequest
         {
             AmName = "ATUL CHAKRAWAR",
             CustomerName = "[S]- 28661 - VOHRA DISTRIBUTORS",
-
             Target2026 = new List<ProductTarget2026>
             {
-                new ProductTarget2026 {
-                    Product = "BRAKE PARTS",
-                    Target2026 = 7080858
-                },
-                new ProductTarget2026 {
-                    Product = "BRAKE FLUID",
-                    Target2026 = 4775806
-                },
-                new ProductTarget2026 {
-                    Product = "Overall",
-                    Target2026 = 14483502
-                },
-            }
+                new() { Product = "BRAKE PARTS", Target2026 = 7080858 },
+                new() { Product = "BRAKE FLUID", Target2026 = 4775806 },
+            },
         };
 
-        try
-        {
-            using var stream = pdf.OpenReadStream();
-            var pdfText = _pdfService.ExtractText(stream);
-            var isSignatureDetected = await _signatureService.IsSignaturePresentAsync(pdf);
-            testValidationrequest.IsSignatureDetected = isSignatureDetected;
+        using var ms = new MemoryStream();
+        await form.File.CopyToAsync(ms);
 
-            var result = await _llmService.ValidateAsync(pdfText, testValidationrequest);
+        var result = await _llmService.ValidateAsync(ms.ToArray(), validationRequest);
 
-            return Ok(new
-            {
-                success = true,
-                isValid = result.isValid,
-                message = result.Message,
-                mismatches = result.Mismatches,
-                signatureDetected = isSignatureDetected,
-                testDataUsed = new
-                {
-                    amName = testValidationrequest.AmName,
-                    customerName = testValidationrequest.CustomerName,
-                    targets = testValidationrequest.Target2026.Select(t => new
-                    {
-                        product = t.Product,
-                        target = t.Target2026
-                    })
-                }
-            });
-
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new
-            {
-                success = false,
-                error = ex.Message
-            });
-        }
+        return Ok(result);
     }
-
-
-
 }

@@ -4,5 +4,5 @@ namespace PdfTargetValidator.Interfaces;
 
 public interface ILlmService
 {
-    Task<ValidationResult> ValidateAsync(string pdfText, ValidationRequest validationRequest);
+    Task<ValidationResult> ValidateAsync(byte[] pdfBytes, ValidationRequest validationRequest);
 }

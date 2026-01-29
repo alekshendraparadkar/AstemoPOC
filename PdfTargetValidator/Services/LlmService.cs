@@ -16,37 +16,17 @@ public class LlmService : ILlmService
         _logger = logger;
     }
 
-    public async Task<ValidationResult> ValidateAsync(string pdfText, ValidationRequest validationRequest)
+    public async Task<ValidationResult> ValidateAsync(byte[] pdfBytes, ValidationRequest validationRequest)
     {
         try
         {
-            _logger.LogInformation("=== PREPROCESSED PDF TEXT SENT TO LLM ===");
-            _logger.LogInformation("{PdfText}", pdfText);
+            var prompt = BuildValidationPrompt(validationRequest);
 
-            var prompt = BuildValidationPrompt(pdfText, validationRequest);
-            var response = await CallOpenAiAsync(prompt);
+            var response = await CallOpenAiAsync(prompt, pdfBytes);
 
             var result = ParseValidationResult(response);
 
             result = NormalizeValidationResult(result);
-            if (!validationRequest.IsSignatureDetected)
-            {
-                result.isValid = false;
-
-                if (!result.Mismatches.Any(m => m.Field.Equals("Signature", StringComparison.OrdinalIgnoreCase)))
-                {
-                    result.Mismatches.Add(new ValidationMismatch
-                    {
-                        Field = "Signature",
-                        ExpectedValue = "Present",
-                        PdfValue = "Not Present",
-                        Reason = "Signature is mandatory but not found in document"
-                    });
-                }
-
-                result.Message = "Validation failed: mandatory signature missing";
-            }
-
 
             return result;
         }
@@ -62,27 +42,24 @@ public class LlmService : ILlmService
         }
     }
 
-    private string BuildValidationPrompt(string pdfText, ValidationRequest request)
+    private string BuildValidationPrompt(ValidationRequest request)
     {
         var targets = string.Join(
-            Environment.NewLine,
-            request.Target2026.Select(t =>
-                $"   - {t.Product}: {t.Target2026}")
-        );
+        Environment.NewLine,
+        request.Target2026.Select(t =>
+            $"   - {t.Product}: {t.Target2026}")
+    );
 
         return $@"
-        You are a PDF validation assistant. Validate the following fields from the PDF content.
+        You are a strict PDF validation assistant.
+        You are given a scanned PDF document
 
         === EXPECTED VALUES ===
         1. AM Name: {request.AmName}
         2. Customer Name: {request.CustomerName}
         3. Target 2026 Values:
         {targets}
-        4. Signature Present: {request.IsSignatureDetected}
 
-
-        === PDF CONTENT ===
-        {pdfText}
 
         === EXTRACTION RULES ===
         1. AM NAME EXTRACTION:
@@ -145,80 +122,68 @@ public class LlmService : ILlmService
         Do NOT add markdown.
 
         {{
-          ""isValid"": true/false,
-          ""message"": ""Brief summary message"",
-          ""mismatches"": [
-            {{
-              ""field"": ""AM Name"",
-              ""expectedValue"": ""{request.AmName}"",
-              ""pdfValue"": ""Value extracted from PDF"",
-              ""reason"": ""Reason for mismatch if any""
-            }},
-            {{
-              ""field"": ""Customer Name"",
-              ""expectedValue"": ""{request.CustomerName}"",
-              ""pdfValue"": ""Value extracted from PDF"",
-              ""reason"": ""Reason for mismatch if any""
-            }},
-            {{
-              ""field"": ""BRAKE PARTS Target"",
-              ""expectedValue"": ""56800"",
-              ""pdfValue"": ""Value from PDF"",
-              ""reason"": ""Reason for mismatch if any""
-            }},
-            {{
-              ""field"": ""BRAKE FLUID Target"",
-              ""expectedValue"": ""456500"",
-              ""pdfValue"": ""Value from PDF"",
-              ""reason"": ""Reason for mismatch if any""
-            }},
-            {{""field"": ""Signature"",
-              ""expectedValue"": ""true"",
-              ""pdfValue"": ""true or false"",
-              ""reason"": ""Signature missing if expected true but not found""
-            }},
-          ]
-        }}
+        ""isValid"": true/false,
+        ""message"": ""Brief summary"",
+        ""mismatches"": [
+             {{
+            ""field"": ""AM Name | Customer Name | <Product> Target | Signature"",
+              ""expectedValue"": ""string"",
+              ""pdfValue"": ""string"",
+              ""reason"": ""short explanation""
+    }}
+  ]
+}}
 
         === IMPORTANT INSTRUCTIONS ===
-        1.AM Name extraction is critical:
-           -If you see ""ASHISH BHATTS"" but expected is ""ASHISH BHATT"", the 'S' is likely from the next field
-           - Look for transitions from lowercase to UPPERCASE to identify field boundaries
-           - Extract names by stopping at common field keywords: Sales, Office, Contact, Region, Area, Code, etc.
-           - Common pattern: ""KEYWORD + NAME"" → Extract only ""NAME""
-                
-        2. For numeric values, handle both formats:
+        
+        1. For numeric values, handle both formats:
            -Indian format: ""70,00,000""(remove commas)
            - Standard format: ""7000000""
 
 
-        3.Return ONLY valid JSON in the specified format
-        
-        4. If extracted value has trailing characters from adjacent fields, exclude them:
-           -""BHATTS"" → ""BHATT"" (remove extra S from adjacent field)
-           - ""SALESA"" → ""SALES"" (remove adjacent characters)
-        ";
+        2.Return ONLY valid JSON in the specified format;
 
+";
     }
 
-    private async Task<string> CallOpenAiAsync(string prompt)
+    private async Task<string> CallOpenAiAsync(string prompt, byte[] pdfBytes)
     {
         var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
         if (string.IsNullOrEmpty(apiKey))
-            throw new InvalidOperationException("Open AI key not set");
+            throw new InvalidOperationException("OpenAI key not set");
+
+        _logger.LogInformation("Sending validation prompt to OpenAI");
+        
+        var pdfBase64 = "data:application/pdf;base64," + Convert.ToBase64String(pdfBytes);
 
         var requestBody = new
         {
             model = "gpt-4o-mini",
-            messages = new[] { new { role = "user", content = prompt } },
-            temperature = 0.1,
-            max_tokens = 1200,
-            response_format = new { type = "json_object" }
+            messages = new object[]
+            {
+                new
+                {
+                    role = "user",
+                    content = new object[]
+                    {
+                        new { type = "text", text = prompt },
+                        new
+                        {
+                            type = "file",
+                            file = new
+                            {
+                                filename = "document.pdf",
+                                file_data = pdfBase64
+                            }
+                        }
+                    }
+                }
+            },
+            temperature = 0,
+            max_tokens = 1200
         };
 
         var jsonBody = JsonSerializer.Serialize(requestBody);
-        _logger.LogDebug("Request body length: {Length} chars", jsonBody.Length);
-
         var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
         var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
@@ -226,45 +191,48 @@ public class LlmService : ILlmService
             Content = content
         };
 
-
         request.Headers.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
+        var response = await _httpClient.SendAsync(request);
+        var responseContent = await response.Content.ReadAsStringAsync();
 
-        request.Headers.Add("Accept", "application/json");
-        request.Headers.Add("User-Agent", "PdfTargetValidator/1.0");
-
-        try
+        if (!response.IsSuccessStatusCode)
         {
-            var response = await _httpClient.SendAsync(request);
-
-            var responseContent = await response.Content.ReadAsStringAsync();
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogError("OpenAI API Error - Status Code: {StatusCode}", response.StatusCode);
-                _logger.LogError("Response Headers: {Headers}", response.Headers.ToString());
-                _logger.LogError("Response Body: {Body}", responseContent);
-
-                response.EnsureSuccessStatusCode();
-            }
-
-            _logger.LogDebug("OpenAI Response successful");
-
-            using var doc = JsonDocument.Parse(responseContent);
-            return doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString() ?? string.Empty;
+            _logger.LogError("OpenAI Error: {Status}", response.StatusCode);
+            _logger.LogError("Error Body: {Body}", responseContent);
+            response.EnsureSuccessStatusCode();
         }
-        catch (Exception ex)
+
+        _logger.LogInformation("Raw OpenAI Response: {RawResponse}", responseContent);
+
+        using var doc = JsonDocument.Parse(responseContent);
+
+        var message = doc.RootElement
+            .GetProperty("choices")[0]
+            .GetProperty("message");
+
+        var contentElement = message.GetProperty("content");
+
+        string result;
+
+        if (contentElement.ValueKind == JsonValueKind.String)
         {
-            _logger.LogError(ex, "HTTP request failed");
-            throw;
+            result = contentElement.GetString() ?? string.Empty;
         }
+        else if (contentElement.ValueKind == JsonValueKind.Array)
+        {
+            result = contentElement[0].GetProperty("text").GetString() ?? string.Empty;
+        }
+        else
+        {
+            result = string.Empty;
+        }
+
+        _logger.LogInformation("Raw LLM Output (before parsing): {LlmOutput}", result);
+
+        return result;
     }
-
 
     private ValidationResult ParseValidationResult(string response)
     {
@@ -272,6 +240,7 @@ public class LlmService : ILlmService
             return CreateDefaultValidationResult("Empty response from AI service");
 
         var cleanedResponse = CleanJsonResponse(response);
+        _logger.LogInformation("Cleaned JSON Response: {CleanedResponse}", cleanedResponse);
 
         try
         {
@@ -282,36 +251,13 @@ public class LlmService : ILlmService
             if (result == null)
                 return CreateDefaultValidationResult("Invalid JSON structure from AI");
 
+            _logger.LogInformation("Parsed ValidationResult: Valid={IsValid}, Mismatches={MismatchCount}", result.isValid, result.Mismatches?.Count ?? 0);
+
             return result;
         }
         catch (JsonException ex)
         {
             _logger.LogError(ex, "Failed to parse AI JSON. Raw response: {Response}", response);
-
-            var jsonMatch = System.Text.RegularExpressions.Regex.Match(
-                response,
-                @"```json\s*(.*?)\s*```|```\s*(.*?)\s*```",
-                System.Text.RegularExpressions.RegexOptions.Singleline);
-
-            if (jsonMatch.Success)
-            {
-                var jsonContent = jsonMatch.Groups[1].Success
-                    ? jsonMatch.Groups[1].Value
-                    : jsonMatch.Groups[2].Value;
-
-                try
-                {
-                    return JsonSerializer.Deserialize<ValidationResult>(
-                               jsonContent,
-                               new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                           ?? CreateDefaultValidationResult("Parsed markdown JSON but got null");
-                }
-                catch
-                {
-                    return CreateDefaultValidationResult("Failed to parse JSON from markdown block");
-                }
-            }
-
             return CreateDefaultValidationResult("AI response was not valid JSON");
         }
     }
@@ -319,10 +265,10 @@ public class LlmService : ILlmService
     private string CleanJsonResponse(string response)
     {
         response = System.Text.RegularExpressions.Regex.Replace(
-                response,
-                @"```json\s*|\s*```",
-                "",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            response,
+            @"```json\s*|\s*```",
+            "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         response = response.Trim();
 
@@ -345,44 +291,49 @@ public class LlmService : ILlmService
         };
     }
 
-    /// <summary>
-    /// Normalize validation results after LLM processing
-    /// With pre-processed text, we only need minimal cleanup for case-insensitive comparisons
-    /// </summary>
     private ValidationResult NormalizeValidationResult(ValidationResult result)
     {
-        if (result?.Mismatches == null)
-            return result;
+        if (result == null)
+            return CreateDefaultValidationResult("Validation result is null");
 
+        if (result.Mismatches == null)
+            result.Mismatches = new List<ValidationMismatch>();
 
+        // Filter out false positives: keep only actual mismatches where values don't match
+        var actualMismatches = new List<ValidationMismatch>();
         foreach (var mismatch in result.Mismatches)
         {
-            if (mismatch.Field.Equals("Signature", StringComparison.OrdinalIgnoreCase))
-                continue;
-
             if (!string.IsNullOrEmpty(mismatch.PdfValue))
                 mismatch.PdfValue = mismatch.PdfValue.Trim();
 
             if (!string.IsNullOrEmpty(mismatch.ExpectedValue))
                 mismatch.ExpectedValue = mismatch.ExpectedValue.Trim();
 
-            if (!string.IsNullOrEmpty(mismatch.PdfValue) &&
-                !string.IsNullOrEmpty(mismatch.ExpectedValue) &&
-                mismatch.PdfValue.Equals(mismatch.ExpectedValue, StringComparison.OrdinalIgnoreCase))
+            // Only add to actual mismatches if the values don't match (case-insensitive comparison)
+            if (!string.Equals(mismatch.PdfValue, mismatch.ExpectedValue, StringComparison.OrdinalIgnoreCase))
             {
-                mismatch.Reason = "Value matches (case-insensitive)";
+                actualMismatches.Add(mismatch);
+                _logger.LogWarning("Mismatch found - Field: {Field}, Expected: {Expected}, Got: {Got}", 
+                    mismatch.Field, mismatch.ExpectedValue, mismatch.PdfValue);
+            }
+            else
+            {
+                _logger.LogInformation("Field matches - {Field}: {Value}", mismatch.Field, mismatch.PdfValue);
             }
         }
-        // Update validation status
-        result.isValid = !result.Mismatches.Any();
 
+        result.Mismatches = actualMismatches;
+        result.isValid = !result.Mismatches.Any();
 
         if (result.isValid)
             result.Message = "All fields match successfully";
         else if (string.IsNullOrWhiteSpace(result.Message))
             result.Message = "One or more validations failed";
 
+        _logger.LogInformation("Normalized Result: IsValid={IsValid}, Message={Message}, MismatchCount={MismatchCount}", 
+            result.isValid, result.Message, result.Mismatches.Count);
+
         return result;
     }
-
 }
+
