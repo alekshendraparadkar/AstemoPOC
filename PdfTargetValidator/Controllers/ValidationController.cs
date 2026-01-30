@@ -36,15 +36,15 @@ public class ValidationController : ControllerBase
             {
                 new ProductTarget2026 {
                     Product = "BRAKE PARTS",
-                    Target2026 = 7080858
+                    Target2026 = 8000000
                 },
                 new ProductTarget2026 {
                     Product = "BRAKE FLUID",
-                    Target2026 = 4775806
+                    Target2026 = 5000000
                 },
                 new ProductTarget2026 {
                     Product = "Overall",
-                    Target2026 = 14483502
+                    Target2026 = 23100000
                 },
             }
         };
